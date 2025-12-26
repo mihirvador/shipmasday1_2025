@@ -167,8 +167,8 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=500)
     user_id: Optional[str] = None
     seed: int = Field(default=-1)
-    texture_size: int = Field(default=512, ge=256, le=2048)
-    decimation_target: int = Field(default=150000, ge=10000, le=500000)  # Higher to prevent mesh holes
+    texture_size: int = Field(default=256, ge=128, le=1024)  # Reduced for speed
+    decimation_target: int = Field(default=150000, ge=10000, le=500000)  # Keep high to prevent mesh holes
     
     @field_validator('prompt')
     @classmethod
@@ -193,6 +193,7 @@ class GenerateResponse(BaseModel):
 
 class GiftObject(BaseModel):
     url: str
+    format: Optional[str] = "glb"  # Model format: glb, ply, obj
     position: tuple[float, float, float] = (0, 0.5, 0)
     rotation: tuple[float, float, float] = (0, 0, 0)
     scale: tuple[float, float, float] = (1, 1, 1)

@@ -267,8 +267,8 @@ class Trellis2Generator:
         # Parse request
         prompt = request.get("prompt", "")
         seed = request.get("seed", -1)
-        texture_size = request.get("texture_size", 512)  # Reduced for speed
-        decimation_target = request.get("decimation_target", 150000)  # Higher to prevent mesh holes
+        texture_size = request.get("texture_size", 256)  # Reduced for speed
+        decimation_target = request.get("decimation_target", 150000)  # Keep high to prevent mesh holes
         
         if not prompt:
             return {"success": False, "message": "Prompt is required", "model_data": None, "format": "glb"}
@@ -283,14 +283,14 @@ class Trellis2Generator:
         generator = torch.Generator(device=self.device).manual_seed(seed)
         print(f"Using seed: {seed}")
         
-        # Step 1: Generate image with SDXL-Turbo (4 steps, no CFG needed!)
+        # Step 1: Generate image with SDXL-Turbo (4 steps)
         enhanced_prompt = f"{prompt}, centered, single object, white background, product photo, studio lighting"
         
         step1_start = time.time()
-        print(f"Step 1: Generating image with SDXL-Turbo (4 steps)...")
+        print(f"Step 1: Generating image with SDXL-Turbo (4 steps, 512x512)...")
         result = self.text_to_image(
             prompt=enhanced_prompt,
-            num_inference_steps=4,  # SDXL-Turbo only needs 4 steps!
+            num_inference_steps=4,  # SDXL-Turbo only needs 4 steps
             guidance_scale=0.0,  # SDXL-Turbo doesn't use guidance
             generator=generator,
             width=512,
@@ -319,9 +319,15 @@ class Trellis2Generator:
         
         # Step 2: Generate 3D with TRELLIS.2 (pre-loaded)
         step2_start = time.time()
-        print("Step 2: Converting to 3D with TRELLIS.2...")
-        # Explicitly request only 1 sample to avoid duplicates
-        outputs = self.trellis.run(image, num_samples=1)
+        print("Step 2: Converting to 3D with TRELLIS.2 (6 steps each)...")
+        # Explicitly request only 1 sample, reduce steps for speed (default is 12)
+        outputs = self.trellis.run(
+            image, 
+            num_samples=1,
+            sparse_structure_sampler_params={"steps": 6},  # Reduced from 12
+            shape_slat_sampler_params={"steps": 6},  # Reduced from 12
+            tex_slat_sampler_params={"steps": 6},  # Reduced from 12
+        )
         print(f"TRELLIS generated {len(outputs)} mesh(es)")
         mesh = outputs[0]
         mesh.simplify(16777216)

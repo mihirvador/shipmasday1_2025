@@ -18,7 +18,7 @@ export default function GiftUnwrap() {
   const [isUnwrapped, setIsUnwrapped] = useState(false);
   const [noGiftsAvailable, setNoGiftsAvailable] = useState(false);
   const router = useRouter();
-  const { user } = useAppStore();
+  const { user, addReceivedGift } = useAppStore();
 
   useEffect(() => {
     const loadGift = async () => {
@@ -56,6 +56,19 @@ export default function GiftUnwrap() {
       try {
         // Claim the gift - this assigns it to the user and marks it as opened
         await claimGift(gift.id, user.id);
+        
+        // Add to received gifts in store
+        addReceivedGift({
+          id: gift.id,
+          creator_id: gift.creator_id,
+          name: gift.name,
+          objects: gift.objects,
+          wrapped: false,
+          created_at: gift.created_at,
+          creator_email: gift.users?.email,
+          received_at: new Date().toISOString(),
+        });
+        
         setIsUnwrapped(true);
       } catch (error) {
         console.error('Error claiming gift:', error);
@@ -158,12 +171,20 @@ export default function GiftUnwrap() {
         <h1 className="text-xl font-bold bg-gradient-to-r from-rose-400 to-pink-400 bg-clip-text text-transparent">
           Mystery Gift
         </h1>
-        <button
-          onClick={() => router.push('/studio')}
-          className="text-slate-400 hover:text-white transition-colors"
-        >
-          Create Gift
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => router.push('/my-gifts')}
+            className="text-slate-400 hover:text-purple-400 transition-colors text-sm"
+          >
+            My Gifts
+          </button>
+          <button
+            onClick={() => router.push('/studio')}
+            className="text-slate-400 hover:text-emerald-400 transition-colors text-sm"
+          >
+            Create Gift
+          </button>
+        </div>
       </header>
 
       {/* Main content */}
@@ -240,7 +261,13 @@ export default function GiftUnwrap() {
               />
             </div>
 
-            <div className="flex justify-center gap-4">
+            <div className="flex justify-center gap-4 flex-wrap">
+              <button
+                onClick={() => router.push('/my-gifts')}
+                className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 text-white font-semibold rounded-xl transition-all"
+              >
+                View in My Gifts
+              </button>
               <button
                 onClick={handleFindAnother}
                 className="px-6 py-3 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-400 hover:to-pink-400 text-white font-semibold rounded-xl transition-all"

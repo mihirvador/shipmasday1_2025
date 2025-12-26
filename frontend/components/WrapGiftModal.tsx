@@ -26,6 +26,7 @@ export default function WrapGiftModal({ isOpen, onClose }: WrapGiftModalProps) {
       // Create the gift in the database
       const giftObjects = sceneObjects.map(obj => ({
         url: obj.url,
+        format: obj.format || 'glb',  // Include format for proper 3D loading
         position: obj.position,
         rotation: obj.rotation,
         scale: obj.scale,

@@ -2,13 +2,18 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { GiftObject, User } from '@/types/database';
+import type { GiftObject, User, Gift } from '@/types/database';
 
 interface SceneObject extends GiftObject {
   id: string;
   name: string;
   prompt?: string;  // Original prompt used to generate
   modelData?: string;  // Base64 encoded model data for wrapping
+}
+
+interface ReceivedGift extends Gift {
+  creator_email?: string;
+  received_at?: string;
 }
 
 interface AppState {
@@ -29,6 +34,15 @@ interface AppState {
   
   generationProgress: number;
   setGenerationProgress: (value: number) => void;
+  
+  // My Gifts - received gifts
+  receivedGifts: ReceivedGift[];
+  setReceivedGifts: (gifts: ReceivedGift[]) => void;
+  addReceivedGift: (gift: ReceivedGift) => void;
+  
+  // Currently viewing gift
+  viewingGift: ReceivedGift | null;
+  setViewingGift: (gift: ReceivedGift | null) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -59,6 +73,16 @@ export const useAppStore = create<AppState>()(
       
       generationProgress: 0,
       setGenerationProgress: (value) => set({ generationProgress: value }),
+      
+      // My Gifts
+      receivedGifts: [],
+      setReceivedGifts: (gifts) => set({ receivedGifts: gifts }),
+      addReceivedGift: (gift) => set((state) => ({
+        receivedGifts: [gift, ...state.receivedGifts.filter(g => g.id !== gift.id)]
+      })),
+      
+      viewingGift: null,
+      setViewingGift: (gift) => set({ viewingGift: gift }),
     }),
     {
       name: 'gift-app-storage',

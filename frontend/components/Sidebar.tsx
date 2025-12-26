@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '@/lib/store';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -10,36 +10,48 @@ interface SidebarProps {
 
 export default function Sidebar({ onWrapGift }: SidebarProps) {
   const [prompt, setPrompt] = useState('');
+  const [progress, setProgress] = useState(0);
   const { 
     sceneObjects, 
     addSceneObject, 
-    removeSceneObject,
-    selectedObjectId,
-    setSelectedObjectId,
+    clearSceneObjects,
     isGenerating,
     setIsGenerating,
-    generationProgress,
-    setGenerationProgress,
-    updateSceneObject
   } = useAppStore();
 
   // Ref to prevent double-clicks
   const isSubmittingRef = useRef(false);
   
+  // The current generated gift (only keep one at a time)
+  const currentGift = sceneObjects.length > 0 ? sceneObjects[sceneObjects.length - 1] : null;
+
+  // Progress animation
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isGenerating) {
+      setProgress(0);
+      interval = setInterval(() => {
+        setProgress(prev => {
+          const next = prev + Math.random() * 3;
+          return next < 90 ? next : 90;
+        });
+      }, 2000);
+    } else {
+      setProgress(0);
+    }
+    return () => clearInterval(interval);
+  }, [isGenerating]);
+
   const handleGenerate = async () => {
     // Prevent double submissions
     if (!prompt.trim() || isGenerating || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
 
+    // Clear previous gift
+    clearSceneObjects();
     setIsGenerating(true);
-    setGenerationProgress(0);
 
     try {
-      // Simulate progress while waiting (TRELLIS.2 can take 5+ minutes)
-      const progressInterval = setInterval(() => {
-        setGenerationProgress((prev) => Math.min(prev + Math.random() * 5, 90));
-      }, 3000);  // Slower progress for longer generation
-
       // 12-minute timeout for TRELLIS.2 generation
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 720000);
@@ -52,47 +64,48 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
       });
 
       clearTimeout(timeoutId);
-      clearInterval(progressInterval);
 
       if (!response.ok) {
         throw new Error('Generation failed');
       }
 
       const data = await response.json();
-      setGenerationProgress(100);
+      setProgress(100);
 
-      // Add the generated model to the scene
-      const newObjectId = uuidv4();
-      console.log('Creating new scene object with ID:', newObjectId);
-      console.log('Current scene objects count:', sceneObjects.length);
-      
+      // Add the generated model
       const newObject = {
-        id: newObjectId,
+        id: uuidv4(),
         name: prompt.slice(0, 30),
         url: data.modelUrl,
-        format: data.format || 'glb',  // Pass format from API
+        format: data.format || 'glb',
         position: [0, 0.5, 0] as [number, number, number],
         rotation: [0, 0, 0] as [number, number, number],
         scale: [1, 1, 1] as [number, number, number],
-        prompt: prompt,  // Store the original prompt
-        modelData: data.modelData,  // Store base64 data for wrapping
+        prompt: prompt,
+        modelData: data.modelData,
       };
 
       addSceneObject(newObject);
-      console.log('Object added, new count should be:', sceneObjects.length + 1);
-      setSelectedObjectId(newObject.id);
-      setPrompt('');
     } catch (error) {
       console.error('Generation error:', error);
       alert('Failed to generate model. Please try again.');
     } finally {
       setIsGenerating(false);
-      setGenerationProgress(0);
       isSubmittingRef.current = false;
     }
   };
 
-  const selectedObject = sceneObjects.find(obj => obj.id === selectedObjectId);
+  const handleRegenerate = () => {
+    if (currentGift) {
+      setPrompt(currentGift.prompt || '');
+    }
+    clearSceneObjects();
+  };
+
+  const handleDiscard = () => {
+    clearSceneObjects();
+    setPrompt('');
+  };
 
   return (
     <div className="w-80 h-full bg-slate-900/95 backdrop-blur-xl border-l border-slate-700/50 flex flex-col">
@@ -101,170 +114,128 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
         <h2 className="text-xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
           Gift Creator
         </h2>
-        <p className="text-sm text-slate-400 mt-1">Generate 3D objects with AI</p>
+        <p className="text-sm text-slate-400 mt-1">Generate 3D gifts with AI</p>
       </div>
 
       {/* Generate Section */}
-      <div className="p-4 border-b border-slate-700/50">
-        <label className="block text-sm font-medium text-slate-300 mb-2">
-          Describe your object
-        </label>
-        <textarea
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          placeholder="e.g., A cute teddy bear with a bow tie..."
-          className="w-full h-24 px-4 py-3 bg-slate-800/80 border border-slate-600/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 resize-none transition-all"
-          disabled={isGenerating}
-        />
-        
-        <button
-          onClick={handleGenerate}
-          disabled={!prompt.trim() || isGenerating}
-          className="w-full mt-3 py-3 px-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 disabled:from-slate-600 disabled:to-slate-600 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
-        >
-          {isGenerating ? (
-            <>
-              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              <span>Generating... {Math.round(generationProgress)}%</span>
-            </>
-          ) : (
-            <>
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              <span>Generate 3D Model</span>
-            </>
-          )}
-        </button>
-
-        {isGenerating && (
-          <div className="mt-3 h-2 bg-slate-700 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 transition-all duration-300"
-              style={{ width: `${generationProgress}%` }}
+      <div className="p-4 flex-1 flex flex-col">
+        {!currentGift ? (
+          <>
+            {/* Prompt input when no gift exists */}
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Describe your gift
+            </label>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder="e.g., A cute teddy bear with a bow tie..."
+              className="w-full h-28 px-4 py-3 bg-slate-800/80 border border-slate-600/50 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 resize-none transition-all"
+              disabled={isGenerating}
             />
-          </div>
-        )}
-      </div>
+            
+            <button
+              onClick={handleGenerate}
+              disabled={!prompt.trim() || isGenerating}
+              className="w-full mt-4 py-3 px-4 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 disabled:from-slate-600 disabled:to-slate-600 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/20"
+            >
+              {isGenerating ? (
+                <>
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  <span>Generating... {Math.round(progress)}%</span>
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  <span>Generate Gift</span>
+                </>
+              )}
+            </button>
 
-      {/* Objects List */}
-      <div className="flex-1 overflow-y-auto p-4">
-        <h3 className="text-sm font-medium text-slate-400 mb-3">Scene Objects ({sceneObjects.length})</h3>
-        
-        {sceneObjects.length === 0 ? (
-          <div className="text-center py-8">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-slate-800/50 flex items-center justify-center">
-              <svg className="w-8 h-8 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-              </svg>
-            </div>
-            <p className="text-slate-500 text-sm">No objects yet</p>
-            <p className="text-slate-600 text-xs mt-1">Generate your first 3D model above</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {sceneObjects.map((obj) => (
-              <div
-                key={obj.id}
-                onClick={() => setSelectedObjectId(obj.id)}
-                className={`p-3 rounded-xl cursor-pointer transition-all ${
-                  selectedObjectId === obj.id
-                    ? 'bg-emerald-500/20 border border-emerald-500/50'
-                    : 'bg-slate-800/50 border border-transparent hover:bg-slate-800'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-200 truncate flex-1">{obj.name}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      removeSceneObject(obj.id);
-                      if (selectedObjectId === obj.id) setSelectedObjectId(null);
-                    }}
-                    className="p-1 text-slate-500 hover:text-red-400 transition-colors"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            {isGenerating && (
+              <div className="mt-3 h-2 bg-slate-700 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 transition-all duration-500"
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!isGenerating && (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-center py-8">
+                  <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-slate-800/50 flex items-center justify-center">
+                    <svg className="w-10 h-10 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
                     </svg>
-                  </button>
+                  </div>
+                  <p className="text-slate-500 text-sm">Describe your gift above</p>
+                  <p className="text-slate-600 text-xs mt-1">AI will create a 3D model for you</p>
                 </div>
               </div>
-            ))}
-          </div>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Gift preview info */}
+            <div className="mb-4 p-4 bg-slate-800/50 rounded-xl border border-slate-700/50">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-cyan-500 flex items-center justify-center">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-white font-medium">Gift Ready!</h3>
+                  <p className="text-slate-400 text-sm truncate">{currentGift.name}</p>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-slate-400 text-sm mb-4 text-center">
+              Like what you see? Wrap it as a gift!
+            </p>
+
+            {/* Action buttons */}
+            <div className="space-y-3 mt-auto">
+              <button
+                onClick={onWrapGift}
+                className="w-full py-3 px-4 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-400 hover:to-pink-400 text-white font-semibold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                </svg>
+                <span>Wrap as Gift</span>
+              </button>
+
+              <button
+                onClick={handleRegenerate}
+                className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white font-semibold rounded-xl transition-all flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Regenerate</span>
+              </button>
+
+              <button
+                onClick={handleDiscard}
+                className="w-full py-2 px-4 text-slate-400 hover:text-red-400 transition-colors text-sm flex items-center justify-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>Discard & Start Over</span>
+              </button>
+            </div>
+          </>
         )}
-      </div>
-
-      {/* Selected Object Controls */}
-      {selectedObject && (
-        <div className="p-4 border-t border-slate-700/50 bg-slate-800/50">
-          <h3 className="text-sm font-medium text-slate-300 mb-3">Transform</h3>
-          
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-slate-400">Position</label>
-              <div className="grid grid-cols-3 gap-2 mt-1">
-                {['X', 'Y', 'Z'].map((axis, i) => (
-                  <div key={axis} className="relative">
-                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-500">{axis}</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={selectedObject.position[i].toFixed(1)}
-                      onChange={(e) => {
-                        const newPos = [...selectedObject.position] as [number, number, number];
-                        newPos[i] = parseFloat(e.target.value) || 0;
-                        updateSceneObject(selectedObject.id, { position: newPos });
-                      }}
-                      className="w-full pl-6 pr-2 py-1.5 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs text-slate-400">Scale</label>
-              <div className="grid grid-cols-3 gap-2 mt-1">
-                {['X', 'Y', 'Z'].map((axis, i) => (
-                  <div key={axis} className="relative">
-                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-500">{axis}</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      value={selectedObject.scale[i].toFixed(1)}
-                      onChange={(e) => {
-                        const newScale = [...selectedObject.scale] as [number, number, number];
-                        newScale[i] = Math.max(0.1, parseFloat(e.target.value) || 0.1);
-                        updateSceneObject(selectedObject.id, { scale: newScale });
-                      }}
-                      className="w-full pl-6 pr-2 py-1.5 bg-slate-700/50 border border-slate-600/50 rounded-lg text-white text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Wrap Gift Button */}
-      <div className="p-4 border-t border-slate-700/50">
-        <button
-          onClick={onWrapGift}
-          disabled={sceneObjects.length === 0}
-          className="w-full py-3 px-4 bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-400 hover:to-pink-400 disabled:from-slate-600 disabled:to-slate-600 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all duration-300 flex items-center justify-center gap-2 shadow-lg shadow-rose-500/20"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
-          </svg>
-          <span>Wrap as Gift</span>
-        </button>
       </div>
     </div>
   );
 }
-

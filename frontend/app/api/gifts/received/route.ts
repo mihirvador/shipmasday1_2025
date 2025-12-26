@@ -1,12 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { backendFetch, isBackendConfigured } from '@/lib/backend';
 
+interface GiftObject {
+  url: string;
+  format?: string;
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
+}
+
 interface GiftResponse {
   id: string;
   creator_id: string;
+  recipient_id?: string;
   name: string;
+  prompt?: string;
+  model_url?: string;
+  objects: GiftObject[];
+  wrapped: boolean;
   status: string;
   created_at: string;
+  claimed_at?: string;
   creator_email?: string;
 }
 

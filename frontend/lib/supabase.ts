@@ -50,7 +50,7 @@ export async function getOrCreateUser(email: string) {
 export async function createGift(
   userId: string,
   name: string,
-  objects: { url: string; position: number[]; rotation: number[]; scale: number[] }[],
+  objects: { url: string; format?: string; position: number[]; rotation: number[]; scale: number[] }[],
   prompt?: string,
   modelData?: string
 ) {

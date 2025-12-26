@@ -50,8 +50,8 @@ export async function POST(request: NextRequest) {
           prompt: prompt.trim(),
           user_id: userId,
           seed: -1,
-          texture_size: 512,
-          decimation_target: 150000,  // Higher to prevent mesh holes
+          texture_size: 256,  // Reduced for speed
+          decimation_target: 150000,  // Keep high to prevent mesh holes
         },
       }
     );

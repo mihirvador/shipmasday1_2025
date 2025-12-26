@@ -1,7 +1,7 @@
 'use client';
 
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, TransformControls, Environment, Grid, useGLTF, PerspectiveCamera } from '@react-three/drei';
+import { OrbitControls, Environment, Grid } from '@react-three/drei';
 import { Suspense, useRef, useEffect, useState } from 'react';
 import * as THREE from 'three';
 import { useAppStore } from '@/lib/store';
@@ -23,10 +23,13 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
   const meshRef = useRef<THREE.Group>(null);
   const [geometry, setGeometry] = useState<THREE.BufferGeometry | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [modelScale, setModelScale] = useState<number>(1);
 
   useEffect(() => {
     const loadModel = async () => {
       try {
+        console.log('Loading model:', url.substring(0, 100) + '...');
+        
         // Check if it's a data URL (base64)
         const isDataUrl = url.startsWith('data:');
         
@@ -39,6 +42,8 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
           const extension = url.split('.').pop()?.toLowerCase();
           format = extension || 'unknown';
         }
+        
+        console.log('Detected format:', format, 'isDataUrl:', isDataUrl);
 
         if (format === 'obj') {
           const loader = new OBJLoader();
@@ -47,12 +52,19 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
             (obj) => {
               obj.traverse((child) => {
                 if (child instanceof THREE.Mesh) {
-                  setGeometry(child.geometry);
+                  const geo = child.geometry;
+                  geo.computeBoundingBox();
+                  geo.center();
+                  setGeometry(geo);
+                  console.log('OBJ loaded successfully');
                 }
               });
             },
             undefined,
-            () => setError('Failed to load OBJ')
+            (err) => {
+              console.error('OBJ load error:', err);
+              setError('Failed to load OBJ');
+            }
           );
         } else if (format === 'ply') {
           const loader = new PLYLoader();
@@ -61,17 +73,48 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
             // Handle base64 data URL
             try {
               const base64Data = url.split(',')[1];
+              if (!base64Data) {
+                throw new Error('No base64 data found in URL');
+              }
+              
+              console.log('Decoding base64 data, length:', base64Data.length);
               const binaryString = atob(base64Data);
               const bytes = new Uint8Array(binaryString.length);
               for (let i = 0; i < binaryString.length; i++) {
                 bytes[i] = binaryString.charCodeAt(i);
               }
+              
+              console.log('Parsing PLY data, byte length:', bytes.length);
               const geo = loader.parse(bytes.buffer);
+              
+              // Check if geometry has vertices
+              const posAttr = geo.getAttribute('position');
+              if (!posAttr || posAttr.count === 0) {
+                console.error('PLY geometry has no vertices');
+                setError('PLY has no geometry');
+                return;
+              }
+              
+              console.log('PLY parsed, vertex count:', posAttr.count);
+              
               geo.computeVertexNormals();
-              // Center and scale the geometry
               geo.computeBoundingBox();
+              
+              // Calculate scale to normalize the model size
+              const bbox = geo.boundingBox!;
+              const size = new THREE.Vector3();
+              bbox.getSize(size);
+              const maxDim = Math.max(size.x, size.y, size.z);
+              
+              console.log('Model dimensions:', size.x, size.y, size.z, 'max:', maxDim);
+              
+              // Scale to fit in a 2-unit box
+              const normalizeScale = maxDim > 0 ? 2 / maxDim : 1;
+              setModelScale(normalizeScale);
+              
               geo.center();
               setGeometry(geo);
+              console.log('PLY loaded successfully with scale:', normalizeScale);
             } catch (e) {
               console.error('Error parsing PLY data URL:', e);
               setError('Failed to parse PLY data');
@@ -81,15 +124,28 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
               url,
               (geo) => {
                 geo.computeVertexNormals();
+                geo.computeBoundingBox();
+                
+                const bbox = geo.boundingBox!;
+                const size = new THREE.Vector3();
+                bbox.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const normalizeScale = maxDim > 0 ? 2 / maxDim : 1;
+                setModelScale(normalizeScale);
+                
                 geo.center();
                 setGeometry(geo);
+                console.log('PLY loaded from URL, vertex count:', geo.getAttribute('position')?.count);
               },
               undefined,
-              () => setError('Failed to load PLY')
+              (err) => {
+                console.error('PLY load error:', err);
+                setError('Failed to load PLY');
+              }
             );
           }
         } else {
-          // For GLTF/GLB files, we'd use useGLTF
+          console.error('Unsupported format:', format);
           setError('Unsupported file format');
         }
       } catch (e) {
@@ -102,25 +158,47 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
   }, [url]);
 
   if (error) {
+    console.log('Rendering error state for model:', id, error);
     return (
-      <mesh position={position} onClick={onSelect}>
-        <boxGeometry args={[0.5, 0.5, 0.5]} />
-        <meshStandardMaterial color="red" />
-      </mesh>
+      <group position={position}>
+        <mesh onClick={onSelect}>
+          <boxGeometry args={[0.5, 0.5, 0.5]} />
+          <meshStandardMaterial color="#ff4444" />
+        </mesh>
+        {/* Error indicator */}
+        <mesh position={[0, 0.5, 0]}>
+          <sphereGeometry args={[0.1, 8, 8]} />
+          <meshStandardMaterial color="#ff0000" emissive="#ff0000" emissiveIntensity={0.5} />
+        </mesh>
+      </group>
     );
   }
 
   if (!geometry) {
     return (
-      <mesh position={position}>
-        <sphereGeometry args={[0.2, 16, 16]} />
-        <meshStandardMaterial color="#888" wireframe />
-      </mesh>
+      <group position={position}>
+        {/* Loading spinner placeholder */}
+        <mesh rotation={[0, Date.now() * 0.001, 0]}>
+          <torusGeometry args={[0.3, 0.05, 8, 16]} />
+          <meshStandardMaterial color="#4fc3f7" wireframe />
+        </mesh>
+      </group>
     );
   }
 
+  // Combine user scale with normalization scale
+  const finalScale: [number, number, number] = [
+    scale[0] * modelScale,
+    scale[1] * modelScale,
+    scale[2] * modelScale,
+  ];
+
+  // Check if geometry has vertex colors (Shap-E PLY files usually do)
+  const hasVertexColors = geometry.hasAttribute('color');
+  console.log('Has vertex colors:', hasVertexColors);
+
   return (
-    <group ref={meshRef} position={position} rotation={rotation} scale={scale}>
+    <group ref={meshRef} position={position} rotation={rotation} scale={finalScale}>
       <mesh
         geometry={geometry}
         onClick={(e) => {
@@ -130,10 +208,18 @@ function Model({ url, position, rotation, scale, id, isSelected, onSelect, onUpd
       >
         <meshStandardMaterial
           color={isSelected ? '#00ff88' : '#ffffff'}
-          metalness={0.3}
-          roughness={0.5}
+          vertexColors={hasVertexColors}
+          metalness={0.1}
+          roughness={0.6}
+          side={THREE.DoubleSide}
         />
       </mesh>
+      {/* Add wireframe overlay when selected for better visibility */}
+      {isSelected && (
+        <mesh geometry={geometry}>
+          <meshBasicMaterial color="#00ff88" wireframe transparent opacity={0.3} />
+        </mesh>
+      )}
     </group>
   );
 }
@@ -195,10 +281,8 @@ export default function Scene3D({ showGiftPreview = false, viewOnly = false, obj
 
   return (
     <div className="w-full h-full bg-gradient-to-b from-slate-900 to-slate-950 rounded-2xl overflow-hidden">
-      <Canvas shadows>
-        <PerspectiveCamera makeDefault position={[3, 3, 3]} fov={50} />
-        
-        <ambientLight intensity={0.4} />
+      <Canvas shadows camera={{ position: [4, 3, 4], fov: 50, near: 0.1, far: 1000 }}>
+        <ambientLight intensity={0.6} />
         <directionalLight
           position={[5, 10, 5]}
           intensity={1}

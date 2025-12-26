@@ -31,7 +31,12 @@ export default function WrapGiftModal({ isOpen, onClose }: WrapGiftModalProps) {
         scale: obj.scale,
       }));
 
-      await createGift(user.id, giftName, giftObjects);
+      // Get the first object's prompt and modelData for the gift
+      const firstObject = sceneObjects[0];
+      const prompt = firstObject?.prompt;
+      const modelData = firstObject?.modelData;
+
+      await createGift(user.id, giftName, giftObjects, prompt, modelData);
 
       setShowSuccess(true);
 

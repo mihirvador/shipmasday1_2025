@@ -58,6 +58,8 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
         position: [0, 0.5, 0] as [number, number, number],
         rotation: [0, 0, 0] as [number, number, number],
         scale: [1, 1, 1] as [number, number, number],
+        prompt: prompt,  // Store the original prompt
+        modelData: data.modelData,  // Store base64 data for wrapping
       };
 
       addSceneObject(newObject);

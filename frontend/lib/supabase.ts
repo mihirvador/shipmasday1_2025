@@ -1,24 +1,6 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { Database } from '@/types/database';
+import type { Gift, GiftObject } from '@/types/database';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-// Create client only if we have valid credentials
-let supabase: SupabaseClient<Database> | null = null;
-
-if (supabaseUrl && supabaseAnonKey) {
-  supabase = createClient<Database>(supabaseUrl, supabaseAnonKey);
-}
-
-export { supabase };
-
-// Demo mode check
-export function isDemoMode() {
-  return !supabaseUrl || !supabaseAnonKey;
-}
-
-// Demo user for when Supabase is not configured
+// Demo user for when backend is not configured
 const demoUser = {
   id: 'demo-user-id',
   email: 'demo@example.com',
@@ -26,109 +8,112 @@ const demoUser = {
 };
 
 // Demo gifts storage (in-memory for demo mode)
-const demoGifts: Map<string, any> = new Map();
-const demoOpenings: Map<string, any> = new Map();
+const demoGifts: Map<string, Gift & { creator_email?: string }> = new Map();
+const demoOpenings: Map<string, { gift_id: string; opener_id: string }> = new Map();
 
-export async function getOrCreateUser(email: string) {
-  if (isDemoMode()) {
-    console.log('Running in demo mode - Supabase not configured');
-    return { ...demoUser, email };
-  }
-
-  // Check if user exists
-  const { data: existingUser } = await supabase!
-    .from('users')
-    .select('*')
-    .eq('email', email)
-    .single();
-
-  if (existingUser) {
-    return existingUser;
-  }
-
-  // Create new user
-  const { data: newUser, error } = await supabase!
-    .from('users')
-    .insert({ email })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return newUser;
+/**
+ * Check if we're in demo mode (no backend configured)
+ */
+export function isDemoMode(): boolean {
+  // In client-side, we can't access env vars directly
+  // The API routes will handle demo mode fallback
+  return false;
 }
 
-export async function uploadGiftFile(
-  userId: string,
-  giftId: string,
-  file: Blob,
-  fileName: string
-) {
-  if (isDemoMode()) {
-    // Return a mock URL in demo mode
-    return `/demo-files/${giftId}/${fileName}`;
-  }
-
-  const filePath = `${userId}/${giftId}/${fileName}`;
-  const bucket = process.env.NEXT_PUBLIC_STORAGE_BUCKET || 'gifts';
-
-  const { data, error } = await supabase!.storage
-    .from(bucket)
-    .upload(filePath, file, {
-      contentType: 'application/octet-stream',
-      upsert: true,
+/**
+ * Create or get a user by email via the backend API
+ */
+export async function getOrCreateUser(email: string) {
+  try {
+    const response = await fetch('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
     });
 
-  if (error) throw error;
+    if (!response.ok) {
+      console.error('Failed to create/get user');
+      return { ...demoUser, email };
+    }
 
-  const { data: urlData } = supabase!.storage
-    .from(bucket)
-    .getPublicUrl(filePath);
-
-  return urlData.publicUrl;
+    const data = await response.json();
+    return data.user;
+  } catch (error) {
+    console.error('Error creating/getting user:', error);
+    return { ...demoUser, email };
+  }
 }
 
+/**
+ * Create a gift via the backend API
+ */
 export async function createGift(
   userId: string,
   name: string,
-  objects: { url: string; position: number[]; rotation: number[]; scale: number[] }[]
+  objects: { url: string; position: number[]; rotation: number[]; scale: number[] }[],
+  prompt?: string,
+  modelData?: string
 ) {
-  if (isDemoMode()) {
+  try {
+    const response = await fetch('/api/gifts/wrap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        name,
+        prompt,
+        modelData,
+        objects,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to wrap gift');
+    }
+
+    const data = await response.json();
+    return data.gift;
+  } catch (error) {
+    console.error('Error creating gift:', error);
+    // Fallback to demo
     const gift = {
       id: `demo-gift-${Date.now()}`,
       creator_id: userId,
       name,
       objects,
       wrapped: true,
+      status: 'in_pool',
       created_at: new Date().toISOString(),
     };
-    demoGifts.set(gift.id, gift);
-    console.log('Demo mode: Gift created', gift);
+    demoGifts.set(gift.id, gift as Gift & { creator_email?: string });
     return gift;
   }
-
-  const { data, error } = await supabase!
-    .from('gifts')
-    .insert({
-      creator_id: userId,
-      name,
-      objects,
-      wrapped: true,
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
 }
 
+/**
+ * Get an available gift from the pool for a user
+ */
 export async function getAvailableGift(userId: string) {
-  if (isDemoMode()) {
+  try {
+    const response = await fetch(`/api/gifts/pool?userId=${userId}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to get gift from pool');
+      return null;
+    }
+
+    const data = await response.json();
+    return data.gift;
+  } catch (error) {
+    console.error('Error getting available gift:', error);
     // Return a demo gift
     const gifts = Array.from(demoGifts.values()).filter(
       (g) => g.creator_id !== userId && !demoOpenings.has(`${g.id}-${userId}`)
     );
     if (gifts.length === 0) {
-      // Create a sample demo gift
       return {
         id: 'sample-demo-gift',
         creator_id: 'other-user',
@@ -142,70 +127,84 @@ export async function getAvailableGift(userId: string) {
           },
         ],
         wrapped: true,
+        status: 'in_pool',
         created_at: new Date().toISOString(),
+        creator_email: 'demo@example.com',
       };
     }
     return gifts[Math.floor(Math.random() * gifts.length)];
   }
-
-  // Get a random gift that wasn't created by this user and hasn't been opened by them
-  const { data: openedGifts } = await supabase!
-    .from('gift_openings')
-    .select('gift_id')
-    .eq('opener_id', userId);
-
-  const openedIds = openedGifts?.map((g) => g.gift_id) || [];
-
-  let query = supabase!
-    .from('gifts')
-    .select('*')
-    .neq('creator_id', userId);
-
-  if (openedIds.length > 0) {
-    query = query.not('id', 'in', `(${openedIds.join(',')})`);
-  }
-
-  const { data: gifts } = await query;
-
-  if (!gifts || gifts.length === 0) return null;
-
-  // Return random gift
-  return gifts[Math.floor(Math.random() * gifts.length)];
 }
 
+/**
+ * Claim a gift from the pool
+ */
+export async function claimGift(giftId: string, userId: string) {
+  try {
+    const response = await fetch('/api/gifts/claim', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, giftId }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to claim gift');
+    }
+
+    const data = await response.json();
+    return data.gift;
+  } catch (error) {
+    console.error('Error claiming gift:', error);
+    throw error;
+  }
+}
+
+/**
+ * Record a gift opening (legacy - now handled by claim)
+ */
 export async function recordGiftOpening(giftId: string, openerId: string) {
-  if (isDemoMode()) {
-    const opening = {
-      id: `demo-opening-${Date.now()}`,
-      gift_id: giftId,
-      opener_id: openerId,
-      opened_at: new Date().toISOString(),
-    };
-    demoOpenings.set(`${giftId}-${openerId}`, opening);
-    console.log('Demo mode: Gift opening recorded', opening);
-    return opening;
-  }
-
-  const { data, error } = await supabase!
-    .from('gift_openings')
-    .insert({
-      gift_id: giftId,
-      opener_id: openerId,
-    })
-    .select()
-    .single();
-
-  if (error) throw error;
-  return data;
+  // This is now handled by the claim endpoint
+  // Keeping for backward compatibility
+  demoOpenings.set(`${giftId}-${openerId}`, {
+    gift_id: giftId,
+    opener_id: openerId,
+  });
+  return { gift_id: giftId, opener_id: openerId };
 }
 
+/**
+ * Get a gift by ID
+ */
 export async function getGiftById(giftId: string) {
-  if (isDemoMode()) {
+  try {
+    const response = await fetch(`/api/gifts/${giftId}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to get gift');
+      return null;
+    }
+
+    const data = await response.json();
+    
+    // Map the response to include 'users' field for backward compatibility
+    if (data.gift) {
+      return {
+        ...data.gift,
+        users: data.gift.creator_email ? { email: data.gift.creator_email } : null,
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting gift:', error);
+    // Return demo gift
     const gift = demoGifts.get(giftId);
     if (gift) {
-      return { ...gift, users: { email: 'creator@demo.com' } };
+      return { ...gift, users: { email: gift.creator_email || 'demo@example.com' } };
     }
-    // Return sample gift
     return {
       id: giftId,
       creator_id: 'other-user',
@@ -219,17 +218,58 @@ export async function getGiftById(giftId: string) {
         },
       ],
       wrapped: true,
+      status: 'in_pool',
       created_at: new Date().toISOString(),
-      users: { email: 'creator@demo.com' },
+      users: { email: 'demo@example.com' },
     };
   }
-
-  const { data, error } = await supabase!
-    .from('gifts')
-    .select('*, users!gifts_creator_id_fkey(email)')
-    .eq('id', giftId)
-    .single();
-
-  if (error) throw error;
-  return data;
 }
+
+/**
+ * Get gifts created by a user
+ */
+export async function getCreatedGifts(userId: string) {
+  try {
+    const response = await fetch(`/api/gifts/created?userId=${userId}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to get created gifts');
+      return [];
+    }
+
+    const data = await response.json();
+    return data.gifts || [];
+  } catch (error) {
+    console.error('Error getting created gifts:', error);
+    return Array.from(demoGifts.values()).filter((g) => g.creator_id === userId);
+  }
+}
+
+/**
+ * Get gifts received by a user
+ */
+export async function getReceivedGifts(userId: string) {
+  try {
+    const response = await fetch(`/api/gifts/received?userId=${userId}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    if (!response.ok) {
+      console.error('Failed to get received gifts');
+      return [];
+    }
+
+    const data = await response.json();
+    return data.gifts || [];
+  } catch (error) {
+    console.error('Error getting received gifts:', error);
+    return [];
+  }
+}
+
+// Legacy export for backward compatibility
+export const supabase = null;

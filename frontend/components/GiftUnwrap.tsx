@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore } from '@/lib/store';
-import { getAvailableGift, recordGiftOpening, getGiftById } from '@/lib/supabase';
+import { getAvailableGift, claimGift, getGiftById } from '@/lib/supabase';
 import type { Gift, GiftObject } from '@/types/database';
 import dynamic from 'next/dynamic';
 
@@ -54,10 +54,12 @@ export default function GiftUnwrap() {
     // Animate unwrapping
     setTimeout(async () => {
       try {
-        await recordGiftOpening(gift.id, user.id);
+        // Claim the gift - this assigns it to the user and marks it as opened
+        await claimGift(gift.id, user.id);
         setIsUnwrapped(true);
       } catch (error) {
-        console.error('Error recording gift opening:', error);
+        console.error('Error claiming gift:', error);
+        alert('Failed to claim gift. It may have already been claimed by someone else.');
       }
       setIsUnwrapping(false);
     }, 1500);

@@ -1,115 +1,81 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { supabase, isDemoMode } from '@/lib/supabase';
-import { v4 as uuidv4 } from 'uuid';
+import { backendFetch, isBackendConfigured } from '@/lib/backend';
+
+interface GenerateResponse {
+  success?: boolean;
+  model_data?: string;
+  model_url?: string;
+  format?: string;
+  message?: string;
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, userId } = await request.json();
+    const body = await request.json();
+    const { prompt, userId } = body;
 
-    if (!prompt) {
+    // Input validation
+    if (!prompt || typeof prompt !== 'string') {
       return NextResponse.json(
         { error: 'Prompt is required' },
         { status: 400 }
       );
     }
 
-    const apiUrl = process.env.NEXT_PUBLIC_TEXT_TO_3D_API;
-
-    if (!apiUrl) {
-      // Return a mock/demo model for development
-      console.log('No TEXT_TO_3D_API configured, returning demo model');
-      
-      return NextResponse.json({
-        modelUrl: '/demo-models/cube.obj',
-        message: 'Demo mode - configure NEXT_PUBLIC_TEXT_TO_3D_API for real generation',
-      });
-    }
-
-    // Call the Modal Shap-E API
-    console.log(`Calling Text-to-3D API: ${apiUrl}`);
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        prompt,
-        batch_size: 1,
-        guidance_scale: 15.0,
-        karras_steps: 64,
-        output_format: 'ply',
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Text-to-3D API error:', errorText);
+    if (prompt.length > 500) {
       return NextResponse.json(
-        { error: 'Failed to generate model' },
-        { status: 500 }
+        { error: 'Prompt too long (max 500 characters)' },
+        { status: 400 }
       );
     }
 
-    const data = await response.json();
-
-    // If the API returns base64 model data, upload it to Supabase Storage
-    if (data.model_data && !isDemoMode() && supabase) {
-      try {
-        // Decode base64 to binary
-        const modelBuffer = Buffer.from(data.model_data, 'base64');
-        const fileExtension = data.format || 'ply';
-        const fileName = `${uuidv4()}.${fileExtension}`;
-        const filePath = `models/${userId || 'anonymous'}/${fileName}`;
-
-        // Upload to Supabase Storage
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('gifts')
-          .upload(filePath, modelBuffer, {
-            contentType: fileExtension === 'ply' ? 'application/x-ply' : 'text/plain',
-            upsert: true,
-          });
-
-        if (uploadError) {
-          console.error('Storage upload error:', uploadError);
-          // Fall back to returning base64 data URL
-          return NextResponse.json({
-            modelUrl: `data:application/octet-stream;base64,${data.model_data}`,
-            format: data.format,
-          });
-        }
-
-        // Get public URL
-        const { data: urlData } = supabase.storage
-          .from('gifts')
-          .getPublicUrl(filePath);
-
-        return NextResponse.json({
-          modelUrl: urlData.publicUrl,
-          format: data.format,
-        });
-      } catch (storageError) {
-        console.error('Storage error:', storageError);
-        // Fall back to data URL
-        return NextResponse.json({
-          modelUrl: `data:application/octet-stream;base64,${data.model_data}`,
-          format: data.format,
-        });
-      }
-    }
-
-    // If API returns a URL directly, use it
-    if (data.model_url || data.modelUrl) {
+    if (!isBackendConfigured()) {
+      // Return a mock/demo model for development
+      console.log('No BACKEND_API_URL configured, returning demo model');
+      
       return NextResponse.json({
-        modelUrl: data.model_url || data.modelUrl,
-        format: data.format,
+        modelUrl: '/demo-models/cube.obj',
+        message: 'Demo mode - configure BACKEND_API_URL for real generation',
       });
     }
 
-    // If we have base64 data but no Supabase, return as data URL
+    // Call the Python backend API
+    console.log(`Calling Backend API for generate`);
+    const { data, error, status } = await backendFetch<GenerateResponse>(
+      '/api/generate',
+      {
+        method: 'POST',
+        body: {
+          prompt: prompt.trim(),
+          user_id: userId,
+          guidance_scale: 15.0,
+          karras_steps: 64,
+        },
+      }
+    );
+
+    if (error || !data) {
+      console.error('Backend API error:', error);
+      return NextResponse.json(
+        { error: error || 'Failed to generate model' },
+        { status: status || 500 }
+      );
+    }
+
+    // If the API returns base64 model data, return as data URL for preview
     if (data.model_data) {
       return NextResponse.json({
         modelUrl: `data:application/octet-stream;base64,${data.model_data}`,
-        format: data.format,
+        modelData: data.model_data,  // Also pass raw base64 for wrapping later
+        format: data.format || 'ply',
+      });
+    }
+
+    // If API returns a URL directly, use it
+    if (data.model_url) {
+      return NextResponse.json({
+        modelUrl: data.model_url,
+        format: data.format || 'ply',
       });
     }
 

@@ -202,12 +202,15 @@ function Model({
 									? originalMat.some(checkTexture)
 									: checkTexture(originalMat);
 								setHasTexture(hasTex);
+								const firstMat = Array.isArray(originalMat)
+									? originalMat[0]
+									: originalMat;
 								console.log("GLB material detected:", {
 									hasTexture: hasTex,
-									materialType: originalMat.constructor.name,
+									materialType: firstMat?.constructor.name,
 									map:
-										"map" in originalMat
-											? !!(originalMat as THREE.MeshStandardMaterial).map
+										firstMat && "map" in firstMat
+											? !!(firstMat as THREE.MeshStandardMaterial).map
 											: false,
 								});
 							}

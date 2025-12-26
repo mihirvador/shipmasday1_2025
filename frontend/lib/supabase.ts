@@ -75,17 +75,23 @@ export async function createGift(
     return data.gift;
   } catch (error) {
     console.error('Error creating gift:', error);
-    // Fallback to demo
-    const gift = {
+    // Fallback to demo - cast objects to proper GiftObject type
+    const giftObjects: GiftObject[] = objects.map(obj => ({
+      url: obj.url,
+      format: obj.format,
+      position: obj.position as [number, number, number],
+      rotation: obj.rotation as [number, number, number],
+      scale: obj.scale as [number, number, number],
+    }));
+    const gift: Gift & { creator_email?: string } = {
       id: `demo-gift-${Date.now()}`,
       creator_id: userId,
       name,
-      objects,
+      objects: giftObjects,
       wrapped: true,
-      status: 'in_pool',
       created_at: new Date().toISOString(),
     };
-    demoGifts.set(gift.id, gift as Gift & { creator_email?: string });
+    demoGifts.set(gift.id, gift);
     return gift;
   }
 }

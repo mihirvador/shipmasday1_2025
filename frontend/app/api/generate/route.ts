@@ -39,17 +39,19 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Call the Python backend API
+    // Call the Python backend API (TRELLIS.2)
     console.log(`Calling Backend API for generate`);
     const { data, error, status } = await backendFetch<GenerateResponse>(
       '/api/generate',
       {
         method: 'POST',
+        timeout: 720000,  // 12 minutes for TRELLIS.2 generation
         body: {
           prompt: prompt.trim(),
           user_id: userId,
-          guidance_scale: 15.0,
-          karras_steps: 64,
+          seed: -1,
+          texture_size: 512,
+          decimation_target: 150000,  // Higher to prevent mesh holes
         },
       }
     );
@@ -67,7 +69,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         modelUrl: `data:application/octet-stream;base64,${data.model_data}`,
         modelData: data.model_data,  // Also pass raw base64 for wrapping later
-        format: data.format || 'ply',
+        format: data.format || 'glb',  // TRELLIS.2 returns GLB
       });
     }
 
@@ -75,7 +77,7 @@ export async function POST(request: NextRequest) {
     if (data.model_url) {
       return NextResponse.json({
         modelUrl: data.model_url,
-        format: data.format || 'ply',
+        format: data.format || 'glb',  // TRELLIS.2 returns GLB
       });
     }
 

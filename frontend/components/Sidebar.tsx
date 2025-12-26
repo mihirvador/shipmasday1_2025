@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useAppStore } from '@/lib/store';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -23,24 +23,35 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
     updateSceneObject
   } = useAppStore();
 
+  // Ref to prevent double-clicks
+  const isSubmittingRef = useRef(false);
+  
   const handleGenerate = async () => {
-    if (!prompt.trim() || isGenerating) return;
+    // Prevent double submissions
+    if (!prompt.trim() || isGenerating || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
     setIsGenerating(true);
     setGenerationProgress(0);
 
     try {
-      // Simulate progress while waiting
+      // Simulate progress while waiting (TRELLIS.2 can take 5+ minutes)
       const progressInterval = setInterval(() => {
-        setGenerationProgress((prev) => Math.min(prev + Math.random() * 10, 90));
-      }, 500);
+        setGenerationProgress((prev) => Math.min(prev + Math.random() * 5, 90));
+      }, 3000);  // Slower progress for longer generation
+
+      // 12-minute timeout for TRELLIS.2 generation
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 720000);
 
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt }),
+        signal: controller.signal,
       });
 
+      clearTimeout(timeoutId);
       clearInterval(progressInterval);
 
       if (!response.ok) {
@@ -51,10 +62,15 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
       setGenerationProgress(100);
 
       // Add the generated model to the scene
+      const newObjectId = uuidv4();
+      console.log('Creating new scene object with ID:', newObjectId);
+      console.log('Current scene objects count:', sceneObjects.length);
+      
       const newObject = {
-        id: uuidv4(),
+        id: newObjectId,
         name: prompt.slice(0, 30),
         url: data.modelUrl,
+        format: data.format || 'glb',  // Pass format from API
         position: [0, 0.5, 0] as [number, number, number],
         rotation: [0, 0, 0] as [number, number, number],
         scale: [1, 1, 1] as [number, number, number],
@@ -63,6 +79,7 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
       };
 
       addSceneObject(newObject);
+      console.log('Object added, new count should be:', sceneObjects.length + 1);
       setSelectedObjectId(newObject.id);
       setPrompt('');
     } catch (error) {
@@ -71,6 +88,7 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
     } finally {
       setIsGenerating(false);
       setGenerationProgress(0);
+      isSubmittingRef.current = false;
     }
   };
 

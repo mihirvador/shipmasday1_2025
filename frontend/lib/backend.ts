@@ -19,7 +19,7 @@ export async function backendFetch<T = unknown>(
   endpoint: string,
   options: RequestOptions = {}
 ): Promise<{ data: T | null; error: string | null; status: number }> {
-  const { method = 'GET', body, timeout = 300000 } = options;
+  const { method = 'GET', body, timeout = 600000 } = options;  // 10 min for TRELLIS.2
 
   if (!BACKEND_URL) {
     return { data: null, error: 'Backend not configured', status: 503 };

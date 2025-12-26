@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "")  # Use anon key (RLS policies allow backend operations)
-MODAL_API_URL = os.getenv("MODAL_API_URL", "")  # Modal Shap-E endpoint
+MODAL_API_URL = os.getenv("MODAL_API_URL", "")  # Modal TRELLIS.2 endpoint
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
 STORAGE_BUCKET = "gifts"
 
@@ -166,8 +166,9 @@ class UserResponse(BaseModel):
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=500)
     user_id: Optional[str] = None
-    guidance_scale: float = Field(default=15.0, ge=1.0, le=30.0)
-    karras_steps: int = Field(default=64, ge=16, le=128)
+    seed: int = Field(default=-1)
+    texture_size: int = Field(default=512, ge=256, le=2048)
+    decimation_target: int = Field(default=150000, ge=10000, le=500000)  # Higher to prevent mesh holes
     
     @field_validator('prompt')
     @classmethod
@@ -184,9 +185,9 @@ class GenerateRequest(BaseModel):
 
 class GenerateResponse(BaseModel):
     success: bool
-    model_data: Optional[str] = None  # Base64 encoded PLY data
+    model_data: Optional[str] = None  # Base64 encoded GLB data
     model_url: Optional[str] = None
-    format: str = "ply"
+    format: str = "glb"
     message: Optional[str] = None
 
 
@@ -201,7 +202,7 @@ class WrapGiftRequest(BaseModel):
     user_id: str
     name: str = Field(..., min_length=1, max_length=200)
     prompt: Optional[str] = Field(default=None, max_length=500)
-    model_data: Optional[str] = None  # Base64 encoded PLY data
+    model_data: Optional[str] = None  # Base64 encoded GLB data
     model_url: Optional[str] = Field(default=None, max_length=2000)
     objects: list[dict] = Field(default=[], max_length=50)
     
@@ -345,7 +346,7 @@ async def get_user(user_id: str):
 
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate_3d_model(request: GenerateRequest, req: Request):
-    """Generate a 3D model from a text prompt using Modal Shap-E."""
+    """Generate a 3D model from a text prompt using Modal TRELLIS.2."""
     await rate_limit_middleware(req)
     logger.info(f"Generate request: '{request.prompt[:50]}...' from {get_client_ip(req)}")
     
@@ -359,19 +360,22 @@ async def generate_3d_model(request: GenerateRequest, req: Request):
         )
     
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=600.0, follow_redirects=True) as client:  # Follow redirects for Modal
+            logger.info(f"Calling Modal API: {MODAL_API_URL}")
             response = await client.post(
-                f"{MODAL_API_URL}/generate",
+                MODAL_API_URL,  # web_endpoint URL already includes the function name
                 json={
                     "prompt": request.prompt,
-                    "batch_size": 1,
-                    "guidance_scale": request.guidance_scale,
-                    "karras_steps": request.karras_steps,
-                    "output_format": "ply",
+                    "seed": request.seed,
+                    "texture_size": request.texture_size,
+                    "decimation_target": request.decimation_target,
                 },
             )
             
+            logger.info(f"Modal API response: status={response.status_code}, headers={dict(response.headers)}")
+            
             if response.status_code != 200:
+                logger.error(f"Modal API error: {response.status_code} - {response.text[:500]}")
                 raise HTTPException(
                     status_code=response.status_code,
                     detail=f"Modal API error: {response.text}",
@@ -382,12 +386,12 @@ async def generate_3d_model(request: GenerateRequest, req: Request):
             return GenerateResponse(
                 success=data.get("success", True),
                 model_data=data.get("model_data"),
-                format=data.get("format", "ply"),
+                format=data.get("format", "glb"),  # TRELLIS.2 returns GLB
                 message=data.get("message"),
             )
             
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Generation timed out")
+        raise HTTPException(status_code=504, detail="Generation timed out - TRELLIS.2 can take up to 5 minutes")
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Failed to reach Modal API: {str(e)}")
 
@@ -402,7 +406,7 @@ async def wrap_gift(request: WrapGiftRequest, req: Request):
     Wrap a gift - store the 3D model and add to the gift pool.
     
     This endpoint:
-    1. Uploads the PLY model to Supabase Storage (if base64 data provided)
+    1. Uploads the GLB model to Supabase Storage (if base64 data provided)
     2. Creates a gift record in the database
     3. Gift is added to the pool with status='in_pool'
     """
@@ -421,7 +425,7 @@ async def wrap_gift(request: WrapGiftRequest, req: Request):
                 request.user_id,
                 gift_id,
                 model_bytes,
-                "model.ply",
+                "model.glb",
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to upload model: {str(e)}")

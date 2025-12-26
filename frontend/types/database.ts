@@ -70,6 +70,7 @@ export interface Database {
 
 export interface GiftObject {
   url: string;
+  format?: string;  // Model format: glb, ply, obj
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];

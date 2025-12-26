@@ -18,9 +18,10 @@ app = modal.App("shap-e-text-to-3d")
 model_cache = modal.Volume.from_name("shap-e-model-cache", create_if_missing=True)
 
 # The shap-e library uses ~/.cache/shap_e_models by default
-# We mount our volume at /cache and set XDG_CACHE_HOME to point there
-CACHE_DIR = "/cache"
-SHAP_E_CACHE = f"{CACHE_DIR}/shap_e_models"
+# We mount our volume at /model-cache (NOT /cache to avoid build-time conflicts)
+# Note: Don't set XDG_CACHE_HOME in the image or pip will populate it during build
+MODEL_CACHE_DIR = "/model-cache"
+SHAP_E_CACHE = f"{MODEL_CACHE_DIR}/shap_e_models"
 
 # Define the container image with all dependencies
 shap_e_image = (
@@ -39,11 +40,9 @@ shap_e_image = (
         "shap-e @ git+https://github.com/openai/shap-e.git",
         "fastapi[standard]",
     )
-    # Set environment variables for caching and memory management
+    # Only set PyTorch memory config here - cache dirs are set at runtime
     .env({
-        "XDG_CACHE_HOME": CACHE_DIR,
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-        "SHAP_E_CACHE_DIR": SHAP_E_CACHE,
     })
 )
 
@@ -100,7 +99,7 @@ def decode_latent_mesh(xm, latent):
     image=shap_e_image,
     gpu="A10G",
     timeout=600,
-    volumes={CACHE_DIR: model_cache},
+    volumes={MODEL_CACHE_DIR: model_cache},
     scaledown_window=300,
 )
 class ShapEModel:
@@ -117,6 +116,10 @@ class ShapEModel:
         print("=" * 50)
         print("Initializing Shap-E Model Container")
         print("=" * 50)
+
+        # Set cache environment variables at runtime (not during image build)
+        os.environ["XDG_CACHE_HOME"] = MODEL_CACHE_DIR
+        os.environ["SHAP_E_CACHE_DIR"] = SHAP_E_CACHE
 
         # Reload volume to get any cached models
         model_cache.reload()

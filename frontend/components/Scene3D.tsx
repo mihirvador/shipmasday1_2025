@@ -110,6 +110,8 @@ function Model({
 							obj.traverse((child) => {
 								if (child instanceof THREE.Mesh) {
 									const geo = child.geometry.clone();
+									// Rotate from Z-up to Y-up coordinate system
+									geo.rotateX(-Math.PI / 2);
 									geo.computeBoundingBox();
 									geo.center();
 
@@ -144,8 +146,60 @@ function Model({
 								return;
 							}
 
+							// Rotate from Z-up (Shap-E) to Y-up (Three.js) coordinate system
+							geo.rotateX(-Math.PI / 2);
+
 							geo.computeVertexNormals();
 							geo.computeBoundingBox();
+
+							// Check and enhance vertex colors if present
+							const colorAttr = geo.getAttribute("color");
+							if (colorAttr) {
+								console.log("PLY has vertex colors, count:", colorAttr.count);
+
+								// Analyze color range
+								let maxColor = 0;
+								for (let i = 0; i < colorAttr.count * 3; i++) {
+									maxColor = Math.max(maxColor, colorAttr.array[i]);
+								}
+								console.log("Max color value:", maxColor);
+
+								// Enhance colors - normalize and brighten
+								const enhancedColors = new Float32Array(colorAttr.array.length);
+								const normalize = maxColor > 1 ? 255 : 1;
+
+								for (let i = 0; i < colorAttr.count; i++) {
+									const r = colorAttr.array[i * 3] / normalize;
+									const g = colorAttr.array[i * 3 + 1] / normalize;
+									const b = colorAttr.array[i * 3 + 2] / normalize;
+
+									// Apply gamma correction + saturation boost to brighten colors
+									const gamma = 0.5;
+									// Boost saturation by increasing distance from gray
+									const avg = (r + g + b) / 3;
+									const satBoost = 1.4;
+									let sr = avg + (r - avg) * satBoost;
+									let sg = avg + (g - avg) * satBoost;
+									let sb = avg + (b - avg) * satBoost;
+									// Clamp, then apply gamma
+									sr = Math.max(0, Math.min(1, sr));
+									sg = Math.max(0, Math.min(1, sg));
+									sb = Math.max(0, Math.min(1, sb));
+									enhancedColors[i * 3] = Math.min(1, Math.pow(sr, gamma));
+									enhancedColors[i * 3 + 1] = Math.min(1, Math.pow(sg, gamma));
+									enhancedColors[i * 3 + 2] = Math.min(1, Math.pow(sb, gamma));
+								}
+
+								geo.setAttribute(
+									"color",
+									new THREE.BufferAttribute(enhancedColors, 3)
+								);
+								console.log("Enhanced vertex colors with gamma correction");
+								setHasVertexColors(true);
+							} else {
+								console.log("PLY has no vertex colors");
+								setHasVertexColors(false);
+							}
 
 							const bbox = geo.boundingBox!;
 							const size = new THREE.Vector3();
@@ -153,7 +207,6 @@ function Model({
 							const maxDim = Math.max(size.x, size.y, size.z);
 
 							setModelScale(maxDim > 0 ? 2 / maxDim : 1);
-							setHasVertexColors(geo.hasAttribute("color"));
 
 							geo.center();
 							setGeometry(geo);
@@ -215,13 +268,23 @@ function Model({
 				onSelect();
 			}}
 		>
-			<meshStandardMaterial
-				color={isSelected ? "#00ff88" : "#ffffff"}
-				vertexColors={hasVertexColors}
-				metalness={0.2}
-				roughness={0.5}
-				side={THREE.DoubleSide}
-			/>
+			{hasVertexColors ? (
+				// Use MeshBasicMaterial for vertex colors - doesn't need lighting
+				<meshBasicMaterial
+					vertexColors
+					side={THREE.DoubleSide}
+					opacity={isSelected ? 0.9 : 1}
+					transparent={isSelected}
+				/>
+			) : (
+				// Fall back to standard material for models without vertex colors
+				<meshStandardMaterial
+					color={isSelected ? "#00ff88" : "#cccccc"}
+					metalness={0.2}
+					roughness={0.5}
+					side={THREE.DoubleSide}
+				/>
+			)}
 		</mesh>
 	);
 }

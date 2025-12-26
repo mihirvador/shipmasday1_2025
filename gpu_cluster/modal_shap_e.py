@@ -86,7 +86,7 @@ def decode_latent_mesh(xm, latent):
         )
 
     decoded = xm.renderer.render_views(
-        AttrDict(cameras=create_pan_cameras(2, latent.device)),
+        AttrDict(cameras=create_pan_cameras(64, latent.device)),  # Good quality mesh
         params=(xm.encoder if isinstance(xm, Transmitter) else xm).bottleneck_to_params(
             latent[None]
         ),

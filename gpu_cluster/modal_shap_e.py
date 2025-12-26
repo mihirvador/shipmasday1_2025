@@ -9,14 +9,18 @@ Run locally: modal serve modal_shap_e.py
 """
 
 import modal
-from pathlib import Path
+import os
 
 # Define the Modal app
 app = modal.App("shap-e-text-to-3d")
 
 # Create a persistent volume to cache model weights
 model_cache = modal.Volume.from_name("shap-e-model-cache", create_if_missing=True)
-MODEL_CACHE_PATH = "/root/.cache/shap_e_models"
+
+# The shap-e library uses ~/.cache/shap_e_models by default
+# We mount our volume at /cache and set XDG_CACHE_HOME to point there
+CACHE_DIR = "/cache"
+SHAP_E_CACHE = f"{CACHE_DIR}/shap_e_models"
 
 # Define the container image with all dependencies
 shap_e_image = (
@@ -24,7 +28,7 @@ shap_e_image = (
     .apt_install("git", "libgl1-mesa-glx", "libglib2.0-0")
     .pip_install(
         "torch",
-        "torchvision",
+        "torchvision", 
         "numpy",
         "Pillow",
         "tqdm",
@@ -35,6 +39,12 @@ shap_e_image = (
         "shap-e @ git+https://github.com/openai/shap-e.git",
         "fastapi[standard]",
     )
+    # Set environment variables for caching and memory management
+    .env({
+        "XDG_CACHE_HOME": CACHE_DIR,
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "SHAP_E_CACHE_DIR": SHAP_E_CACHE,
+    })
 )
 
 
@@ -88,10 +98,10 @@ def decode_latent_mesh(xm, latent):
 
 @app.cls(
     image=shap_e_image,
-    gpu="A10G",  # Can also use "A10G" for faster but more expensive inference
-    timeout=600,  # 10 minute timeout for generation
-    volumes={MODEL_CACHE_PATH: model_cache},
-    scaledown_window=300,  # Keep container warm for 5 minutes
+    gpu="A10G",
+    timeout=600,
+    volumes={CACHE_DIR: model_cache},
+    scaledown_window=300,
 )
 class ShapEModel:
     """Shap-E model class that handles text-to-3D generation."""
@@ -100,23 +110,57 @@ class ShapEModel:
     def load_models(self):
         """Load models when container starts - this runs once per container."""
         import torch
+        import shap_e.models.download as download_module
         from shap_e.models.download import load_model, load_config
         from shap_e.diffusion.gaussian_diffusion import diffusion_from_config
 
-        print("Loading Shap-E models...")
+        print("=" * 50)
+        print("Initializing Shap-E Model Container")
+        print("=" * 50)
+
+        # Reload volume to get any cached models
+        model_cache.reload()
+
+        # Ensure cache directory exists
+        os.makedirs(SHAP_E_CACHE, exist_ok=True)
         
+        # Monkey-patch the shap-e cache directory to use our volume
+        original_cache_dir = download_module.default_cache_dir
+        download_module.default_cache_dir = lambda: SHAP_E_CACHE
+        
+        # Check what's already cached
+        cached_files = os.listdir(SHAP_E_CACHE) if os.path.exists(SHAP_E_CACHE) else []
+        print(f"Cached files in {SHAP_E_CACHE}: {cached_files}")
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
+        
+        # Print GPU memory info
+        if torch.cuda.is_available():
+            print(f"GPU: {torch.cuda.get_device_name(0)}")
+            print(f"Total GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
-        # Load the transmitter (decoder) and text-conditioned model
+        print("Loading transmitter model...")
         self.xm = load_model("transmitter", device=self.device)
+        
+        print("Loading text300M model...")
         self.model = load_model("text300M", device=self.device)
+        
+        print("Loading diffusion config...")
         self.diffusion = diffusion_from_config(load_config("diffusion"))
 
-        # Commit any downloaded models to the volume
+        # Commit newly downloaded models to the volume for future use
         model_cache.commit()
         
+        # Print memory usage after loading
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated(0) / 1e9
+            reserved = torch.cuda.memory_reserved(0) / 1e9
+            print(f"GPU memory after loading: {allocated:.2f} GB allocated, {reserved:.2f} GB reserved")
+
+        print("=" * 50)
         print("Models loaded successfully!")
+        print("=" * 50)
 
     @modal.method()
     def generate_3d(
@@ -125,67 +169,81 @@ class ShapEModel:
         batch_size: int = 1,
         guidance_scale: float = 15.0,
         karras_steps: int = 64,
-        output_format: str = "ply",  # "ply" or "obj"
+        output_format: str = "ply",
     ) -> list[bytes]:
         """
         Generate 3D meshes from a text prompt.
-        
-        Args:
-            prompt: Text description of the 3D object to generate
-            batch_size: Number of variations to generate (1-4 recommended)
-            guidance_scale: How closely to follow the prompt (higher = more faithful)
-            karras_steps: Number of diffusion steps (more = better quality, slower)
-            output_format: Output format, either "ply" or "obj"
-            
-        Returns:
-            List of mesh file bytes
         """
         import torch
         import io
+        import gc
         from shap_e.diffusion.sample import sample_latents
-        # Use our inlined decode_latent_mesh to avoid ipywidgets dependency
 
-        print(f"Generating 3D model for prompt: '{prompt}'")
+        print(f"\n{'=' * 50}")
+        print(f"Generating 3D model for: '{prompt}'")
         print(f"Settings: batch_size={batch_size}, guidance={guidance_scale}, steps={karras_steps}")
+        
+        # Print memory before generation
+        if torch.cuda.is_available():
+            allocated = torch.cuda.memory_allocated(0) / 1e9
+            print(f"GPU memory before generation: {allocated:.2f} GB allocated")
 
-        # Sample latent representations
-        latents = sample_latents(
-            batch_size=batch_size,
-            model=self.model,
-            diffusion=self.diffusion,
-            guidance_scale=guidance_scale,
-            model_kwargs=dict(texts=[prompt] * batch_size),
-            progress=True,
-            clip_denoised=True,
-            use_fp16=True,
-            use_karras=True,
-            karras_steps=karras_steps,
-            sigma_min=1e-3,
-            sigma_max=160,
-            s_churn=0,
-        )
+        try:
+            # Sample latent representations with autocast for memory efficiency
+            with torch.cuda.amp.autocast():
+                latents = sample_latents(
+                    batch_size=batch_size,
+                    model=self.model,
+                    diffusion=self.diffusion,
+                    guidance_scale=guidance_scale,
+                    model_kwargs=dict(texts=[prompt] * batch_size),
+                    progress=True,
+                    clip_denoised=True,
+                    use_fp16=True,
+                    use_karras=True,
+                    karras_steps=karras_steps,
+                    sigma_min=1e-3,
+                    sigma_max=160,
+                    s_churn=0,
+                )
 
-        # Decode latents to meshes
-        meshes = []
-        for i, latent in enumerate(latents):
-            print(f"Decoding mesh {i + 1}/{len(latents)}...")
-            mesh = decode_latent_mesh(self.xm, latent).tri_mesh()
+            # Decode latents to meshes
+            meshes = []
+            for i, latent in enumerate(latents):
+                print(f"Decoding mesh {i + 1}/{len(latents)}...")
+                
+                with torch.no_grad():
+                    mesh = decode_latent_mesh(self.xm, latent).tri_mesh()
+                
+                # Write to bytes buffer
+                buffer = io.BytesIO()
+                if output_format.lower() == "ply":
+                    mesh.write_ply(buffer)
+                else:
+                    obj_content = io.StringIO()
+                    mesh.write_obj(obj_content)
+                    buffer.write(obj_content.getvalue().encode('utf-8'))
+                
+                buffer.seek(0)
+                meshes.append(buffer.read())
+                
+                # Clear intermediate tensors
+                del mesh
             
-            # Write to bytes buffer
-            buffer = io.BytesIO()
-            if output_format.lower() == "ply":
-                mesh.write_ply(buffer)
-            else:
-                # For OBJ, we need to handle it differently as write_obj expects text mode
-                obj_content = io.StringIO()
-                mesh.write_obj(obj_content)
-                buffer.write(obj_content.getvalue().encode('utf-8'))
+            # Clear latents
+            del latents
             
-            buffer.seek(0)
-            meshes.append(buffer.read())
-
-        print(f"Generated {len(meshes)} mesh(es) successfully!")
-        return meshes
+            print(f"Generated {len(meshes)} mesh(es) successfully!")
+            return meshes
+            
+        finally:
+            # Always clean up GPU memory after generation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
+                allocated = torch.cuda.memory_allocated(0) / 1e9
+                print(f"GPU memory after cleanup: {allocated:.2f} GB allocated")
+            print(f"{'=' * 50}\n")
 
 
 # FastAPI web endpoint
@@ -208,7 +266,6 @@ def web_app():
         version="1.0.0",
     )
 
-    # Enable CORS for frontend access
     api.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -228,7 +285,7 @@ def web_app():
         success: bool
         message: str
         model_url: str | None = None
-        model_data: str | None = None  # Base64 encoded mesh data
+        model_data: str | None = None
         format: str
 
     @api.get("/")
@@ -243,7 +300,6 @@ def web_app():
     async def generate(request: GenerateRequest):
         """Generate a 3D model from a text prompt."""
         try:
-            # Get the model instance and generate
             model = ShapEModel()
             meshes = model.generate_3d.remote(
                 prompt=request.prompt,
@@ -256,7 +312,6 @@ def web_app():
             if not meshes:
                 raise HTTPException(status_code=500, detail="No meshes generated")
 
-            # Return the first mesh as base64
             mesh_data = base64.b64encode(meshes[0]).decode("utf-8")
             
             return GenerateResponse(
@@ -300,7 +355,6 @@ def web_app():
     return api
 
 
-# Local testing function
 @app.local_entrypoint()
 def main(prompt: str = "a cute cat"):
     """Test the model locally."""
@@ -309,10 +363,8 @@ def main(prompt: str = "a cute cat"):
     model = ShapEModel()
     meshes = model.generate_3d.remote(prompt=prompt, batch_size=1)
     
-    # Save the first mesh locally
-    output_file = f"test_output.ply"
+    output_file = "test_output.ply"
     with open(output_file, "wb") as f:
         f.write(meshes[0])
     
     print(f"Saved mesh to {output_file}")
-

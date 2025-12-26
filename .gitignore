@@ -1,0 +1,4 @@
+gpu_cluster/shap-e
+gpu_cluster/.shap_e_venv
+gpu_cluster/shap_e_model_cache
+gpu_cluster/__pycache__

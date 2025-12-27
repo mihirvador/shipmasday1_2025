@@ -64,11 +64,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // If the API returns base64 model data, return as data URL for preview
+    // Fallback: If the API returns base64 model data (storage upload failed), use as data URL
+    // This is a fallback case - normally model_url should be returned
     if (data.model_data) {
+      console.warn('Backend returned base64 instead of storage URL - storage upload may have failed');
       return NextResponse.json({
         modelUrl: `data:application/octet-stream;base64,${data.model_data}`,
-        modelData: data.model_data,  // Also pass raw base64 for wrapping later
         format: data.format || 'glb',  // TRELLIS.2 returns GLB
       });
     }

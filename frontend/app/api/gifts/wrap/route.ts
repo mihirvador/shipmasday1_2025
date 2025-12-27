@@ -12,7 +12,8 @@ interface WrapResponse {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { userId, name, prompt, modelData, modelUrl, objects } = body;
+    // Note: modelData is no longer passed - the model URL is already in objects[0].url
+    const { userId, name, prompt, objects } = body;
 
     // Input validation
     if (!userId || typeof userId !== 'string') {
@@ -51,6 +52,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Get model URL from objects - it's already stored in Supabase storage
+    const modelUrl = objects?.[0]?.url;
+
     const { data, error, status } = await backendFetch<WrapResponse>(
       '/api/gifts/wrap',
       {
@@ -59,7 +63,6 @@ export async function POST(request: NextRequest) {
           user_id: userId,
           name: name.trim(),
           prompt: prompt?.trim(),
-          model_data: modelData,
           model_url: modelUrl,
           objects: objects || [],
         },

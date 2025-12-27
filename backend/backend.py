@@ -300,6 +300,57 @@ async def upload_to_storage(
     return url_data
 
 
+async def delete_from_storage(url: str) -> bool:
+    """Delete a file from Supabase Storage by its public URL.
+    
+    Returns True if deleted successfully, False otherwise.
+    """
+    if not supabase or not url:
+        return False
+    
+    try:
+        # Extract file path from URL
+        # URL format: https://xxx.supabase.co/storage/v1/object/public/gifts/temp/uuid/model.glb
+        if "/storage/v1/object/public/" in url:
+            # Get the path after the bucket name
+            parts = url.split(f"/storage/v1/object/public/{STORAGE_BUCKET}/")
+            if len(parts) == 2:
+                file_path = parts[1]
+                supabase.storage.from_(STORAGE_BUCKET).remove([file_path])
+                logger.info(f"Deleted from storage: {file_path}")
+                return True
+    except Exception as e:
+        logger.error(f"Failed to delete from storage: {e}")
+    
+    return False
+
+
+# ============================================================================
+# Cleanup Endpoints
+# ============================================================================
+
+class CleanupRequest(BaseModel):
+    url: str  # The storage URL to delete
+
+
+@app.post("/api/cleanup")
+async def cleanup_model(request: CleanupRequest, req: Request):
+    """Delete a temporary model from storage (e.g., when user regenerates).
+    
+    This prevents orphaned files from accumulating in storage.
+    Only deletes files in the 'temp' folder for safety.
+    """
+    await rate_limit_middleware(req)
+    
+    # Safety check: only delete from temp folder
+    if "/temp/" not in request.url:
+        logger.warning(f"Cleanup rejected - not a temp file: {request.url[:50]}")
+        return {"success": False, "message": "Can only delete temporary files"}
+    
+    success = await delete_from_storage(request.url)
+    return {"success": success}
+
+
 # ============================================================================
 # User Endpoints
 # ============================================================================
@@ -347,7 +398,11 @@ async def get_user(user_id: str):
 
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate_3d_model(request: GenerateRequest, req: Request):
-    """Generate a 3D model from a text prompt using Modal TRELLIS.2."""
+    """Generate a 3D model from a text prompt using Modal TRELLIS.2.
+    
+    The model is immediately uploaded to Supabase storage and a URL is returned.
+    This avoids passing large base64 data back and forth.
+    """
     await rate_limit_middleware(req)
     logger.info(f"Generate request: '{request.prompt[:50]}...' from {get_client_ip(req)}")
     
@@ -383,16 +438,49 @@ async def generate_3d_model(request: GenerateRequest, req: Request):
                 )
             
             data = response.json()
+            model_data = data.get("model_data")
+            model_format = data.get("format", "glb")
+            
+            # Upload model to Supabase storage immediately
+            # This avoids passing large base64 back to frontend and then back again
+            if model_data and supabase:
+                try:
+                    model_bytes = base64.b64decode(model_data)
+                    # Use a temporary ID for pre-gift storage
+                    temp_id = str(uuid.uuid4())
+                    model_url = await upload_to_storage(
+                        "temp",  # Temporary user folder
+                        temp_id,
+                        model_bytes,
+                        f"model.{model_format}",
+                    )
+                    logger.info(f"Model uploaded to storage: {model_url[:50]}...")
+                    
+                    return GenerateResponse(
+                        success=True,
+                        model_url=model_url,
+                        format=model_format,
+                        message="Model generated and uploaded to storage",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to upload model to storage: {e}")
+                    # Fall back to returning base64 if storage upload fails
+                    return GenerateResponse(
+                        success=data.get("success", True),
+                        model_data=model_data,
+                        format=model_format,
+                        message=data.get("message"),
+                    )
             
             return GenerateResponse(
                 success=data.get("success", True),
                 model_data=data.get("model_data"),
-                format=data.get("format", "glb"),  # TRELLIS.2 returns GLB
+                format=data.get("format", "glb"),
                 message=data.get("message"),
             )
             
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Generation timed out - TRELLIS.2 can take up to 5 minutes")
+        raise HTTPException(status_code=504, detail="Generation timed out - TRELLIS.2 can take up to 10 minutes")
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Failed to reach Modal API: {str(e)}")
 
@@ -404,32 +492,24 @@ async def generate_3d_model(request: GenerateRequest, req: Request):
 @app.post("/api/gifts/wrap", response_model=GiftResponse)
 async def wrap_gift(request: WrapGiftRequest, req: Request):
     """
-    Wrap a gift - store the 3D model and add to the gift pool.
+    Wrap a gift - create a gift record and add to the gift pool.
     
-    This endpoint:
-    1. Uploads the GLB model to Supabase Storage (if base64 data provided)
-    2. Creates a gift record in the database
-    3. Gift is added to the pool with status='in_pool'
+    The model is already stored in Supabase storage during generation.
+    This endpoint just:
+    1. Creates a gift record in the database with the model URL
+    2. Gift is added to the pool with status='in_pool'
     """
     await rate_limit_middleware(req)
     logger.info(f"Wrap gift request: '{request.name}' from user {request.user_id[:8]}...")
     check_supabase()
     
     gift_id = str(uuid.uuid4())
-    model_url = request.model_url
     
-    # If base64 model data is provided, upload to storage
-    if request.model_data:
-        try:
-            model_bytes = base64.b64decode(request.model_data)
-            model_url = await upload_to_storage(
-                request.user_id,
-                gift_id,
-                model_bytes,
-                "model.glb",
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to upload model: {str(e)}")
+    # Model URL should come from objects array (already stored during generation)
+    # or from model_url field directly
+    model_url = request.model_url
+    if not model_url and request.objects:
+        model_url = request.objects[0].get("url") if request.objects else None
     
     # Build objects array - include the main model and any additional objects
     objects = request.objects.copy() if request.objects else []

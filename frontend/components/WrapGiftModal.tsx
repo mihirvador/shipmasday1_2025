@@ -32,12 +32,13 @@ export default function WrapGiftModal({ isOpen, onClose }: WrapGiftModalProps) {
         scale: obj.scale,
       }));
 
-      // Get the first object's prompt and modelData for the gift
+      // Get the first object's prompt for the gift
+      // Note: modelData is no longer needed - the model is already stored in Supabase storage
+      // and the URL is in giftObjects[0].url
       const firstObject = sceneObjects[0];
       const prompt = firstObject?.prompt;
-      const modelData = firstObject?.modelData;
 
-      await createGift(user.id, giftName, giftObjects, prompt, modelData);
+      await createGift(user.id, giftName, giftObjects, prompt);
 
       setShowSuccess(true);
 

@@ -8,7 +8,7 @@ interface SceneObject extends GiftObject {
   id: string;
   name: string;
   prompt?: string;  // Original prompt used to generate
-  modelData?: string;  // Base64 encoded model data for wrapping
+  // Note: modelData removed - models are now stored in Supabase storage immediately
 }
 
 interface ReceivedGift extends Gift {

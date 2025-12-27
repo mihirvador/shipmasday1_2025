@@ -51,10 +51,11 @@ export async function createGift(
   userId: string,
   name: string,
   objects: { url: string; format?: string; position: number[]; rotation: number[]; scale: number[] }[],
-  prompt?: string,
-  modelData?: string
+  prompt?: string
 ) {
   try {
+    // Note: modelData is no longer passed - the model is already stored in Supabase storage
+    // and the URL is in objects[0].url
     const response = await fetch('/api/gifts/wrap', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -62,7 +63,6 @@ export async function createGift(
         userId,
         name,
         prompt,
-        modelData,
         objects,
       }),
     });

@@ -42,10 +42,29 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
     return () => clearInterval(interval);
   }, [isGenerating]);
 
+  // Cleanup a temporary model from storage (best-effort, don't block on it)
+  const cleanupModel = async (url: string) => {
+    if (!url || url.startsWith('data:') || url.startsWith('/demo')) return;
+    try {
+      await fetch('/api/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+    } catch (e) {
+      console.warn('Cleanup failed:', e);
+    }
+  };
+
   const handleGenerate = async () => {
     // Prevent double submissions
     if (!prompt.trim() || isGenerating || isSubmittingRef.current) return;
     isSubmittingRef.current = true;
+
+    // Cleanup previous model from storage before generating new one
+    if (currentGift?.url) {
+      cleanupModel(currentGift.url);
+    }
 
     // Clear previous gift
     clearSceneObjects();
@@ -73,6 +92,7 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
       setProgress(100);
 
       // Add the generated model
+      // Note: The model is already stored in Supabase storage, so we just use the URL
       const newObject = {
         id: uuidv4(),
         name: prompt.slice(0, 30),
@@ -82,7 +102,6 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
         rotation: [0, 0, 0] as [number, number, number],
         scale: [1, 1, 1] as [number, number, number],
         prompt: prompt,
-        modelData: data.modelData,
       };
 
       addSceneObject(newObject);
@@ -97,6 +116,10 @@ export default function Sidebar({ onWrapGift }: SidebarProps) {
 
   const handleRegenerate = () => {
     if (currentGift) {
+      // Cleanup the current model from storage
+      if (currentGift.url) {
+        cleanupModel(currentGift.url);
+      }
       setPrompt(currentGift.prompt || '');
     }
     clearSceneObjects();

@@ -134,22 +134,6 @@ export default function EmailEntry() {
               )}
             </button>
           </form>
-
-          <div className="mt-6 flex items-center gap-4">
-            <div className="flex-1 h-px bg-slate-700" />
-            <span className="text-slate-500 text-sm">or</span>
-            <div className="flex-1 h-px bg-slate-700" />
-          </div>
-
-          <button
-            onClick={() => router.push('/unwrap')}
-            className="w-full mt-6 py-4 px-6 bg-slate-800/80 hover:bg-slate-700/80 border border-slate-600/50 text-slate-200 font-semibold rounded-xl transition-all duration-300 flex items-center justify-center gap-2"
-          >
-            <svg className="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 15.546c-.523 0-1.046.151-1.5.454a2.704 2.704 0 01-3 0 2.704 2.704 0 00-3 0 2.704 2.704 0 01-3 0 2.704 2.704 0 00-3 0 2.701 2.701 0 01-1.5.454M9 6v2m3-2v2m3-2v2M9 3h.01M12 3h.01M15 3h.01M21 21v-7a2 2 0 00-2-2H5a2 2 0 00-2 2v7h18zm-3-9v-2a2 2 0 00-2-2H8a2 2 0 00-2 2v2h12z" />
-            </svg>
-            <span>Unwrap a Mystery Gift</span>
-          </button>
         </div>
 
         {/* Footer text */}

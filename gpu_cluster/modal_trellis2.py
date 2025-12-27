@@ -111,14 +111,14 @@ trellis2_image = (
         "mkdir -p /tmp/extensions",
         "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast",
         "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
-        gpu="B200",
+        gpu="H100",
     )
     # Install nvdiffrec (from setup.sh --nvdiffrec with PR #20 fix)
     .run_commands(
         "rm -rf /tmp/extensions/nvdiffrec",
         "git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec",
         "pip install /tmp/extensions/nvdiffrec --no-build-isolation",
-        gpu="B200",
+        gpu="H100",
     )
     # Install cumesh (from setup.sh --cumesh with PR #20 fix)
     .run_commands(
@@ -128,13 +128,13 @@ trellis2_image = (
         "cd /tmp/extensions/CuMesh && git submodule sync",
         "cd /tmp/extensions/CuMesh && git submodule update --init --recursive",
         "pip install /tmp/extensions/CuMesh --no-build-isolation",
-        gpu="B200",
+        gpu="H100",
     )
     # Install flexgemm (from setup.sh --flexgemm)
     .run_commands(
         "git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM --recursive",
         "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
-        gpu="B200",
+        gpu="H100",
     )
     # Install o-voxel (from setup.sh --o-voxel with PR #20 fix)
     .run_commands(
@@ -144,12 +144,12 @@ trellis2_image = (
         "cd /tmp/extensions/o-voxel && sed -i 's|cumesh @ git+https://github.com/JeffreyXiang/CuMesh.git|cumesh|' pyproject.toml",
         "cd /tmp/extensions/o-voxel && sed -i 's|flex_gemm @ git+https://github.com/JeffreyXiang/FlexGEMM.git|flex_gemm|' pyproject.toml",
         "pip install /tmp/extensions/o-voxel --no-build-isolation",
-        gpu="B200",
+        gpu="H100",
     )
     # Install flash-attn 2.7.3 (from setup.sh --flash-attn with PR #20 fix)
     .run_commands(
         "pip install flash-attn==2.7.3 --no-build-isolation",
-        gpu="B200",
+        gpu="H100",
     )
     .env({
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
@@ -166,9 +166,10 @@ trellis2_image = (
 
 @app.cls(
     image=trellis2_image,
-    gpu="B200",
+    gpu="H100",
     timeout=1200,
     container_idle_timeout=600,  # Keep container warm for 10 min between requests
+    concurrency_limit=4,  # Allow up to 4 parallel containers (4 concurrent requests)
     volumes={MODEL_CACHE_DIR: model_cache},
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )

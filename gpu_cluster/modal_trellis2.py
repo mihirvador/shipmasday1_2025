@@ -111,14 +111,14 @@ trellis2_image = (
         "mkdir -p /tmp/extensions",
         "git clone -b v0.4.0 https://github.com/NVlabs/nvdiffrast.git /tmp/extensions/nvdiffrast",
         "pip install /tmp/extensions/nvdiffrast --no-build-isolation",
-        gpu="H100",
+        gpu="h200",
     )
     # Install nvdiffrec (from setup.sh --nvdiffrec with PR #20 fix)
     .run_commands(
         "rm -rf /tmp/extensions/nvdiffrec",
         "git clone -b renderutils https://github.com/JeffreyXiang/nvdiffrec.git /tmp/extensions/nvdiffrec",
         "pip install /tmp/extensions/nvdiffrec --no-build-isolation",
-        gpu="H100",
+        gpu="h200",
     )
     # Install cumesh (from setup.sh --cumesh with PR #20 fix)
     .run_commands(
@@ -128,13 +128,13 @@ trellis2_image = (
         "cd /tmp/extensions/CuMesh && git submodule sync",
         "cd /tmp/extensions/CuMesh && git submodule update --init --recursive",
         "pip install /tmp/extensions/CuMesh --no-build-isolation",
-        gpu="H100",
+        gpu="h200",
     )
     # Install flexgemm (from setup.sh --flexgemm)
     .run_commands(
         "git clone https://github.com/JeffreyXiang/FlexGEMM.git /tmp/extensions/FlexGEMM --recursive",
         "pip install /tmp/extensions/FlexGEMM --no-build-isolation",
-        gpu="H100",
+        gpu="h200",
     )
     # Install o-voxel (from setup.sh --o-voxel with PR #20 fix)
     .run_commands(
@@ -144,12 +144,12 @@ trellis2_image = (
         "cd /tmp/extensions/o-voxel && sed -i 's|cumesh @ git+https://github.com/JeffreyXiang/CuMesh.git|cumesh|' pyproject.toml",
         "cd /tmp/extensions/o-voxel && sed -i 's|flex_gemm @ git+https://github.com/JeffreyXiang/FlexGEMM.git|flex_gemm|' pyproject.toml",
         "pip install /tmp/extensions/o-voxel --no-build-isolation",
-        gpu="H100",
+        gpu="h200",
     )
     # Install flash-attn 2.7.3 (from setup.sh --flash-attn with PR #20 fix)
     .run_commands(
         "pip install flash-attn==2.7.3 --no-build-isolation",
-        gpu="H100",
+        gpu="h200",
     )
     .env({
         "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
@@ -166,23 +166,39 @@ trellis2_image = (
 
 @app.cls(
     image=trellis2_image,
-    gpu="H100",
+    gpu="h200",
     timeout=1200,
-    container_idle_timeout=600,  # Keep container warm for 10 min between requests
-    concurrency_limit=4,  # Allow up to 4 parallel containers (4 concurrent requests)
+    scaledown_window=60,  # Keep container warm for 10 min between requests
+    enable_memory_snapshot=True,  # Enable instant cold starts (<1s) by snapshotting GPU memory after model loading
+    experimental_options={"enable_gpu_snapshot": True},  # Snapshot GPU state for even faster restores
+    max_containers=4,  # Allow up to 4 parallel containers (4 concurrent requests)
     volumes={MODEL_CACHE_DIR: model_cache},
     secrets=[modal.Secret.from_name("huggingface-secret")],
 )
 class Trellis2Generator:
     """Optimized generator with pre-loaded models and warm CUDA kernels."""
     
-    @modal.enter()
+    @modal.enter(snap=True)
     def load_models(self):
-        """Load models once when container starts (warm start optimization)."""
+        """Load models once when container starts (warm start optimization).
+        
+        With GPU snapshots enabled, this entire method (including GPU state) is captured
+        and can be restored in <1 second on cold starts.
+        """
         import torch
         from huggingface_hub import login
         from PIL import Image
         import numpy as np
+        import warnings
+        import logging
+        
+        # Disable PyTorch and library warnings
+        warnings.filterwarnings('ignore')
+        logging.getLogger('torch').setLevel(logging.ERROR)
+        logging.getLogger('transformers').setLevel(logging.ERROR)
+        logging.getLogger('diffusers').setLevel(logging.ERROR)
+        logging.getLogger('huggingface_hub').setLevel(logging.ERROR)
+        torch.set_warn_always(False)
         
         # Login to HuggingFace
         hf_token = os.environ.get("HF_TOKEN")
@@ -198,27 +214,64 @@ class Trellis2Generator:
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"Total GPU memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
         
-        # Load SDXL-Turbo for FAST image generation (4 steps instead of 20+)
-        print("Loading SDXL-Turbo (fast mode)...")
+        # Following Modal's recommended pattern for storing model weights:
+        # https://modal.com/docs/guide/model-weights
+        from huggingface_hub import snapshot_download
         from diffusers import AutoPipelineForText2Image
         
+        # Load SDXL-Turbo for FAST image generation (4 steps instead of 20+)
+        print("Loading SDXL-Turbo (fast mode)...")
+        
+        # Download model to volume if not already cached
+        sdxl_model_path = f"{MODEL_CACHE_DIR}/sdxl-turbo"
+        sdxl_model_index = f"{sdxl_model_path}/model_index.json"
+        if not os.path.exists(sdxl_model_index):
+            print(f"Downloading SDXL-Turbo to volume (one-time)...")
+            snapshot_download(
+                repo_id="stabilityai/sdxl-turbo",
+                local_dir=sdxl_model_path,
+            )
+            print(f"Model downloaded to {sdxl_model_path}")
+        else:
+            print(f"Loading SDXL-Turbo from cached volume...")
+        
+        # Load from local volume path
         self.text_to_image = AutoPipelineForText2Image.from_pretrained(
-            "stabilityai/sdxl-turbo",
+            sdxl_model_path,
             torch_dtype=torch.float16,
             variant="fp16",
-            cache_dir=MODEL_CACHE_DIR,
         ).to(self.device)
         
-        # Load TRELLIS.2
+        # Load TRELLIS.2 with caching to volume
         print("Loading TRELLIS.2 pipeline...")
         from trellis2.pipelines import Trellis2ImageTo3DPipeline
         
-        self.trellis = Trellis2ImageTo3DPipeline.from_pretrained("microsoft/TRELLIS.2-4B")
+        # Download model to volume if not already cached (only happens once)
+        trellis_model_path = f"{MODEL_CACHE_DIR}/TRELLIS.2-4B"
+        trellis_config = f"{trellis_model_path}/config.yaml"
+        if not os.path.exists(trellis_config):
+            print(f"Downloading TRELLIS.2-4B to volume (one-time)...")
+            snapshot_download(
+                repo_id="microsoft/TRELLIS.2-4B",
+                local_dir=trellis_model_path,
+            )
+            print(f"Model downloaded to {trellis_model_path}")
+        else:
+            print(f"Loading TRELLIS.2-4B from cached volume...")
+        
+        # Load from local volume path
+        self.trellis = Trellis2ImageTo3DPipeline.from_pretrained(trellis_model_path)
         self.trellis.cuda()
         
-        # Pre-load rembg model
+        # Pre-load rembg model (downloads to U2NET_HOME which points to volume)
         print("Pre-loading rembg model...")
         from rembg import new_session
+        
+        # Ensure rembg model directory exists in volume
+        u2net_path = f"{MODEL_CACHE_DIR}/u2net"
+        os.makedirs(u2net_path, exist_ok=True)
+        
+        # This will download the model to U2NET_HOME (set in env to volume path)
         self.rembg_session = new_session("u2net")
         
         # Warmup SDXL-Turbo (compile CUDA kernels)
@@ -237,7 +290,27 @@ class Trellis2Generator:
         dummy_img = Image.fromarray(np.zeros((64, 64, 3), dtype=np.uint8))
         _ = remove(dummy_img, session=self.rembg_session)
         
-        # Commit any newly downloaded models
+        # CRITICAL: Warmup TRELLIS.2 to compile all CUDA kernels before snapshot
+        # This is the main source of the 57-second delay during first inference!
+        print("Warming up TRELLIS.2 (compiling CUDA kernels - this takes ~60s but only happens once)...")
+        import time
+        warmup_start = time.time()
+        
+        # Create a simple test image for warmup (RGBA with alpha channel)
+        warmup_img = Image.new("RGBA", (512, 512), (128, 128, 128, 255))
+        
+        # Run full TRELLIS pipeline to compile all kernels
+        warmup_outputs = self.trellis.run(
+            warmup_img,
+            num_samples=1,
+            sparse_structure_sampler_params={"steps": 6},
+            shape_slat_sampler_params={"steps": 6},
+            tex_slat_sampler_params={"steps": 6},
+        )
+        del warmup_outputs, warmup_img
+        print(f"TRELLIS.2 warmup completed in {time.time() - warmup_start:.1f}s")
+        
+        # Commit any newly downloaded models to volume
         model_cache.commit()
         
         # Clear warmup memory
@@ -250,7 +323,7 @@ class Trellis2Generator:
         print(f"GPU memory after warmup: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
         print("=" * 50)
     
-    @modal.web_endpoint(method="POST")
+    @modal.fastapi_endpoint(method="POST")
     def generate(self, request: dict):
         """Generate 3D model - models are pre-loaded for fast response."""
         import torch
@@ -262,6 +335,10 @@ class Trellis2Generator:
         from rembg import remove
         import o_voxel
         import time
+        import warnings
+        
+        # Suppress warnings during inference
+        warnings.filterwarnings('ignore')
         
         start_time = time.time()
         
@@ -331,7 +408,9 @@ class Trellis2Generator:
         )
         print(f"TRELLIS generated {len(outputs)} mesh(es)")
         mesh = outputs[0]
-        mesh.simplify(16777216)
+        # Simplify mesh - use decimation_target instead of arbitrary high number
+        # This reduces processing time while maintaining quality
+        mesh.simplify(decimation_target)
         print(f"Mesh generated in {time.time() - step2_start:.1f}s")
         
         # Step 3: Export to GLB
@@ -382,7 +461,7 @@ class Trellis2Generator:
 
 # Health check endpoint (lightweight, no GPU)
 @app.function(image=trellis2_image, timeout=60)
-@modal.web_endpoint(method="GET")
+@modal.fastapi_endpoint(method="GET")
 def health():
     return {"status": "healthy", "message": "TRELLIS.2 Text-to-3D API"}
 

@@ -168,7 +168,7 @@ trellis2_image = (
     image=trellis2_image,
     gpu="h200",
     timeout=1200,
-    scaledown_window=60,  # Keep container warm for 10 min between requests
+    scaledown_window=600,  # Keep container warm for 10 min; use `modal app stop` to force shutdown for snapshot creation
     enable_memory_snapshot=True,  # Enable instant cold starts (<1s) by snapshotting GPU memory after model loading
     experimental_options={"enable_gpu_snapshot": True},  # Snapshot GPU state for even faster restores
     max_containers=4,  # Allow up to 4 parallel containers (4 concurrent requests)
@@ -248,7 +248,7 @@ class Trellis2Generator:
         
         # Download model to volume if not already cached (only happens once)
         trellis_model_path = f"{MODEL_CACHE_DIR}/TRELLIS.2-4B"
-        trellis_config = f"{trellis_model_path}/config.yaml"
+        trellis_config = f"{trellis_model_path}/pipeline.json"  # TRELLIS uses pipeline.json
         if not os.path.exists(trellis_config):
             print(f"Downloading TRELLIS.2-4B to volume (one-time)...")
             snapshot_download(
